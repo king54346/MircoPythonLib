@@ -1,10 +1,10 @@
-from machine import I2C, Pin
+from machine import SoftI2C, Pin
 from micropython import const
-from time import sleep
+from time import sleep_ms
 
-AS5600_ID = const(0x36)  # Éè±¸ID
+AS5600_ID = const(0x36)  # è®¾å¤‡ID
 
-# ¸ù¾İÊı¾İÊÖ²áÃüÃû¼Ä´æÆ÷
+# æ ¹æ®æ•°æ®æ‰‹å†Œå‘½åå¯„å­˜å™¨
 ZMCO = const(0)
 ZPOS = const(1)
 MPOS = const(3)
@@ -17,56 +17,85 @@ AGC = const(0x1A)
 MAGNITUDE = const(0x1B)
 BURN = const(0xFF)
 
+# RAWANGLEï¼šè¿™ä¸ªå¯„å­˜å™¨æä¾›çš„æ˜¯åŸå§‹çš„è§’åº¦ä¿¡æ¯ï¼Œè¡¨ç¤º0-360Â°çš„è§’åº¦ï¼Œé€šå¸¸æ²¡æœ‰è¿›è¡Œä»»ä½•çš„åå¤„ç†æˆ–æ»¤æ³¢ã€‚
+#
+# ANGLEï¼šé€šå¸¸æ˜¯ç»è¿‡æ»¤æ³¢æˆ–å…¶ä»–å¤„ç†çš„è§’åº¦æ•°æ®ï¼Œå¯ä»¥ç”¨äºæ›´å¹³æ»‘çš„åº”ç”¨ä¸­ã€‚
+#
+#
+#
+# ZMCO (Zero Multi-Turn Configuration):
+# å¯„å­˜å™¨åœ°å€: 0x00
+# å¤§å°: 8 bits
+# ç”¨é€”: ç”¨äºå®šä¹‰é›¶ç‚¹ä¿å­˜çš„å¾ªç¯æ¬¡æ•°ã€‚
+#
+# ZPOS (Zero Position):
+# å¯„å­˜å™¨åœ°å€: 0x01 (é«˜8ä½) å’Œ 0x02 (ä½8ä½)
+# å¤§å°: 16 bits
+# ç”¨é€”: å®šä¹‰é›¶ä½ç½®çš„è§’åº¦ï¼Œå³å½“ä¼ æ„Ÿå™¨æµ‹é‡åˆ°è¯¥è§’åº¦æ—¶ï¼Œè¾“å‡ºå°†æ˜¯0%ã€‚
+#
+# MPOS (Maximum Position):
+# å¯„å­˜å™¨åœ°å€: 0x03 (é«˜8ä½) å’Œ 0x04 (ä½8ä½)
+# å¤§å°: 16 bits
+# ç”¨é€”: å®šä¹‰æœ€å¤§ä½ç½®çš„è§’åº¦ï¼Œå³å½“ä¼ æ„Ÿå™¨æµ‹é‡åˆ°è¯¥è§’åº¦æ—¶ï¼Œè¾“å‡ºå°†æ˜¯100%ã€‚
+#
+# MANG (Maximum Angle):
+# å¯„å­˜å™¨åœ°å€: 0x05 (é«˜8ä½) å’Œ 0x06 (ä½8ä½)
+# å¤§å°: 16 bits
+# ç”¨é€”: å®šä¹‰RAW ANGLEä¸MPOSä¹‹é—´çš„è§’åº¦å·®ï¼Œè¯¥è§’åº¦å·®å°†å¯¹åº”PWMçš„æœ€å¤§è¾“å‡ºå€¼ã€‚
+
 
 class AS5600:
     def __init__(self, i2c, device_id=AS5600_ID):
         self.i2c = i2c
         self.device_id = device_id
 
-    # ¼Ä´æÆ÷µØÖ·¡¢ÆğÊ¼Î»¡¢½áÊøÎ»ºÍÒ»¸öÓÃÓÚ½ÓÊÕ¶îÍâ²ÎÊı
-    def _readwrite(self, register, firstbit, lastbit, *args):
-        """¶ÁĞ´1»ò2¸ö×Ö½ÚµÄÎ»×Ö¶Î¡£(Âú×ãËùÓĞĞèÇó)"""
-        # ÅĞ¶ÏÒª¶ÁÈ¡»òĞ´ÈëµÄ×Ö½ÚÊı Èç¹ûfirstbit´óÓÚ7£¨¼´ÔÚµÚ¶ş¸ö×Ö½ÚÖĞ£©£¬ÔòÑ¡Ôñ2¸ö×Ö½Ú£»·ñÔò£¬Ö»Ñ¡Ôñ1¸ö×Ö½Ú¡£
+    # å¯„å­˜å™¨åœ°å€ã€èµ·å§‹ä½ã€ç»“æŸä½å’Œä¸€ä¸ªç”¨äºæ¥æ”¶é¢å¤–å‚æ•°
+    def _readwrite(self, register, firstbit, lastbit, value=None):
+        """è¯»å†™1æˆ–2ä¸ªå­—èŠ‚çš„ä½å­—æ®µã€‚(æ»¡è¶³æ‰€æœ‰éœ€æ±‚)"""
+        # åˆ¤æ–­è¦è¯»å–æˆ–å†™å…¥çš„å­—èŠ‚æ•° å¦‚æœfirstbitå¤§äº7ï¼ˆå³åœ¨ç¬¬äºŒä¸ªå­—èŠ‚ä¸­ï¼‰ï¼Œåˆ™é€‰æ‹©2ä¸ªå­—èŠ‚ï¼›å¦åˆ™ï¼Œåªé€‰æ‹©1ä¸ªå­—èŠ‚ã€‚
         byte_num = 2 if firstbit > 7 else 1
-        # ¼ÆËãĞèÒªÌáÈ¡»òÉèÖÃÎ»×Ö¶Î
-        mask = 1 << (firstbit - lastbit + 1) - 1
-        # ¶ÁÈ¡¼Ä´æÆ÷µÄµ±Ç°Öµ
-        b = self.i2c.readfrom(register, byte_num)
-        # ÌáÈ¡¾ÉÖµ
-        oldvalue = b[1] << 8 + b[0] if byte_num == 2 else b[0]
+        # è®¡ç®—éœ€è¦æå–æˆ–è®¾ç½®ä½å­—æ®µ
+        mask = (1 << (firstbit - lastbit + 1)) - 1
+
+        # è¯»å–å¯„å­˜å™¨çš„å½“å‰å€¼
+        b = self.i2c.readfrom_mem(self.device_id, register, byte_num)
+        # æå–æ—§å€¼
+        oldvalue = ((b[0] << 8) | b[1]) if byte_num == 2 else b[0]
         oldvalue &= mask
-        # Ã»ÓĞÌá¹©¶îÍâµÄ²ÎÊı£¨¼´Ã»ÓĞÒªĞ´ÈëµÄÖµ£©£¬ÔòÖ»·µ»Øµ±Ç°´Ó¼Ä´æÆ÷¶ÁÈ¡µÄÖµ
-        if not args:  # Èç¹ûÃ»ÓĞÌá¹©²ÎÊı£¬ÔòÖ»¶ÁÈ¡
+        # æ²¡æœ‰æä¾›é¢å¤–çš„å‚æ•°ï¼ˆå³æ²¡æœ‰è¦å†™å…¥çš„å€¼ï¼‰ï¼Œåˆ™åªè¿”å›å½“å‰ä»å¯„å­˜å™¨è¯»å–çš„å€¼
+        if value is None:  # å¦‚æœæ²¡æœ‰æä¾›å‚æ•°ï¼Œåˆ™åªè¯»å–
             return oldvalue
-        # Èç¹ûÌá¹©ÁËĞ´ÈëÖµ£¬Ê×ÏÈ´Óargs»ñÈ¡¸ÃÖµ
-        value = args[0]
-        # »ñÈ¡Çå³ıoldvalueÖĞµÄÌØ¶¨×Ó×Ö¶Î
+        # å¦‚æœæä¾›äº†å†™å…¥å€¼ï¼Œé¦–å…ˆä»argsè·å–è¯¥å€¼
+        # è·å–æ¸…é™¤oldvalueä¸­çš„ç‰¹å®šå­å­—æ®µ
         hole = ~(mask << lastbit)
-        # ĞÂÖµÉèÖÃÎªËùĞèµÄÎ»
-        newvalue = (oldvalue & hole) | ((value & mask) << lastbit)  # Õâ½«ËùĞèµÄÖµÒÆµ½ÕıÈ·µÄÎ»ÖÃ²¢ÇÒÎ»»ò²Ù×÷ºÏ²¢ĞÂÖµ
-        # ½«ĞÂÖµĞ´»Ø¼Ä´æÆ÷
+        # æ–°å€¼è®¾ç½®ä¸ºæ‰€éœ€çš„ä½
+        newvalue = (oldvalue & hole) | ((value & mask) << lastbit)  # è¿™å°†æ‰€éœ€çš„å€¼ç§»åˆ°æ­£ç¡®çš„ä½ç½®å¹¶ä¸”ä½æˆ–æ“ä½œåˆå¹¶æ–°å€¼
+        # å°†æ–°å€¼å†™å›å¯„å­˜å™¨
         if byte_num == 1:
-            self.i2c.writeto(register, bytes([newvalue]))
+            self.i2c.writeto_mem(self.device_id,register, bytes([newvalue]))
         else:
-            # Èç¹ûÊÇ2¸ö×Ö½Ú£¬ÔòĞèÒª¶ÔĞÂÖµ½øĞĞ·Ö¸î²¢½«Æä×ª»»Îª×Ö½ÚÁĞ±í bytes»á×Ô¶¯»ñÈ¡µÍ8Î»
-            self.i2c.writeto(register, bytes([newvalue >> 8, newvalue]))
+            high_byte = newvalue >> 8
+            low_byte = newvalue & 0xFF
+            byte_representation = bytes([high_byte, low_byte])
+            # å¦‚æœæ˜¯2ä¸ªå­—èŠ‚ï¼Œåˆ™éœ€è¦å¯¹æ–°å€¼è¿›è¡Œåˆ†å‰²å¹¶å°†å…¶è½¬æ¢ä¸ºå­—èŠ‚åˆ—è¡¨ bytesä¼šè‡ªåŠ¨è·å–ä½8ä½
+            self.i2c.writeto_mem(self.device_id,register,byte_representation)
 
         return value
 
     def zmco(self, value=None):
-        """¼ÇÂ¼Áã½Ç¶È±»ÉÕÂ¼µÄ´ÎÊı"""
+        """è®°å½•é›¶è§’åº¦è¢«çƒ§å½•çš„æ¬¡æ•°"""
         return self._readwrite(ZMCO, 1, 0, value)
 
     def zpos(self, value=None):
-        """ÁãÎ»ÖÃ - ÀıÈçµ±×÷ÎªµçÎ»Æ÷Ê¹ÓÃ"""
+        """é›¶ä½ç½® - ä¾‹å¦‚å½“ä½œä¸ºç”µä½å™¨ä½¿ç”¨"""
         return self._readwrite(ZPOS, 11, 0, value)
 
     def mpos(self, value=None):
-        """×î´óÎ»ÖÃ - ÀıÈçµ±×÷ÎªµçÎ»Æ÷Ê¹ÓÃ"""
+        """æœ€å¤§ä½ç½® - ä¾‹å¦‚å½“ä½œä¸ºç”µä½å™¨ä½¿ç”¨"""
         return self._readwrite(MPOS, 11, 0, value)
 
     def mang(self, value=None):
-        """×î´ó½Ç¶È£¨MPOSµÄÌæ´ú£©"""
+        """æœ€å¤§è§’åº¦ï¼ˆMPOSçš„æ›¿ä»£ï¼‰"""
         return self._readwrite(MANG, 11, 0, value)
 
     # PM(1:0)     1:0     Power Mode      00 = NOM, 01 = LPM1, 10 = LPM2, 11 = LPM3
@@ -78,11 +107,11 @@ class AS5600:
     # WD          13      Watchdog        0 = OFF, 1 = ON
 
     def pm(self, value=None):
-        """µçÔ´Ä£Ê½ - ²Î¼ûÊı¾İÊÖ²á"""
+        """ç”µæºæ¨¡å¼ - å‚è§æ•°æ®æ‰‹å†Œ"""
         return self._readwrite(CONF, 1, 0, value)
 
     def hyst(self, value=None):
-        """ÖÍºó - 0,1,2»ò3 LSB"""
+        """æ»å - 0,1,2æˆ–3 LSB"""
         return self._readwrite(CONF, 3, 2, value)
 
     def outs(self, value=None):
@@ -106,11 +135,11 @@ class AS5600:
         return self._readwrite(CONF, 13, 13, value)
 
     def raw_angle(self):
-        """Ô­Ê¼½Ç¶È£¬ÎŞÂË²¨¡¢Ëõ·ÅµÈ"""
+        """åŸå§‹è§’åº¦ï¼Œæ— æ»¤æ³¢ã€ç¼©æ”¾ç­‰"""
         return self._readwrite(RAWANGLE, 11, 0)
 
     def angle(self):
-        """´øÓĞÖÍºóµÈµÄ½Ç¶È"""
+        """å¸¦æœ‰æ»åç­‰çš„è§’åº¦"""
         return self._readwrite(ANGLE, 11, 0)
 
     # Status registers - Read only
@@ -137,8 +166,8 @@ class AS5600:
         # Read datasheet before using these functions!!!
 
     # Permanently burn zpos and mpos values into device (Can only use 3 times)
-    # µ±ÏòÕâ¸ö¼Ä´æÆ÷Ğ´Èë 0x80 Ê±£¬ZPOS ºÍ MPOS µÄµ±Ç°Öµ»á±»ÉÕÂ¼¡£
-    # µ±ÏòÕâ¸ö¼Ä´æÆ÷Ğ´Èë 0x40 Ê±£¬»áÉÕÂ¼ ZPOS¡¢MPOS ºÍ CONF ¼Ä´æÆ÷µÄÉèÖÃ¡£
+    # å½“å‘è¿™ä¸ªå¯„å­˜å™¨å†™å…¥ 0x80 æ—¶ï¼ŒZPOS å’Œ MPOS çš„å½“å‰å€¼ä¼šè¢«çƒ§å½•ã€‚
+    # å½“å‘è¿™ä¸ªå¯„å­˜å™¨å†™å…¥ 0x40 æ—¶ï¼Œä¼šçƒ§å½• ZPOSã€MPOS å’Œ CONF å¯„å­˜å™¨çš„è®¾ç½®ã€‚
     def burn_angle(self):
         "Burn ZPOS and MPOS -(can only do this 3 times)"
         self._readwrite(BURN, 7, 0, 0x80)  # This wrt
@@ -148,19 +177,19 @@ class AS5600:
         self._readwrite(BURN, 7, 0, 0x40)
 
     def scan(self):
-        """µ÷ÊÔ¹¤¾ßº¯Êı£¬¼ì²éÄúµÄi2c×ÜÏß"""
+        """è°ƒè¯•å·¥å…·å‡½æ•°ï¼Œæ£€æŸ¥æ‚¨çš„i2cæ€»çº¿"""
         devices = self.i2c.scan()
         print(devices)
         if self.device_id in devices:
             print('Found AS5600 (id =', hex(self.device_id), ')')
-        print(self.CONF)
+        # print(self.CONF)
 
 
-i2c = I2C(0, scl=Pin(17), sda=Pin(16), freq=400000)
+i2c = SoftI2C(scl=Pin(26), sda=Pin(25), freq=400000)
 
 z = AS5600(i2c)
 z.scan()
-whatever = 89
+
 while True:
-    print(z.MD)
-    sleep(1)
+    print(z.angle())
+    sleep_ms(200)
